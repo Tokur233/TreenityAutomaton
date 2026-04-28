@@ -10,8 +10,28 @@ def run_study():
         browser = p.chromium.launch(headless=False, args=["--mute-audio"])
 
         STATE_FILE = "zhihuishu_state.json"
+        ENV_FILE = ".env"
 
-        TARGET_COURSE_URL = "https://ai-smart-course-student-pro.zhihuishu.com/learnPage/2028067952205553664/1978646709568786432/156520"
+        TARGET_COURSE_URL = None
+        if os.path.exists(ENV_FILE):
+            with open(ENV_FILE, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" in line:
+                        key, value = line.split("=", 1)
+                        if key.strip() == "TARGET_COURSE_URL":
+                            TARGET_COURSE_URL = value.strip().strip('"').strip("'")
+                            break
+
+        if not TARGET_COURSE_URL:
+            TARGET_COURSE_URL = os.getenv("TARGET_COURSE_URL")
+
+        if not TARGET_COURSE_URL:
+            print("⚠️ 请先在 .env 文件中设置 TARGET_COURSE_URL，或通过环境变量传入。")
+            print("   .env 内容示例：TARGET_COURSE_URL=https://...")
+            return
 
         if os.path.exists(STATE_FILE):
             print("🍪 发现本地登录记忆 (Cookie)！尝试自动免密空降...")
@@ -231,7 +251,8 @@ def run_study():
 
                                     for i in range(card_count):
                                         current_card = (
-                                            page.locator(
+                                            page
+                                            .locator(
                                                 '.resources-section:has(div.resources-detail-title:has-text("必学资源"))'
                                             )
                                             .locator(".basic-info-video-card-container")
@@ -282,7 +303,8 @@ def run_study():
                                                 time.sleep(2)
 
                                                 fresh_card = (
-                                                    page.locator(
+                                                    page
+                                                    .locator(
                                                         '.resources-section:has(div.resources-detail-title:has-text("必学资源"))'
                                                     )
                                                     .locator(
