@@ -44,10 +44,10 @@ cd D:\Files\Projects\Treenity
 pip install -r requirements.txt
 ```
 
-4. 安装 Playwright 浏览器引擎：
+4. 安装 Playwright 浏览器引擎(个人使用Chromium)
 
 ```bash
-python -m playwright install
+python -m playwright install chromium
 ```
 
 ## 配置环境
