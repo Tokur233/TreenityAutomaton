@@ -1,5 +1,2 @@
-# 本地 Playwright 登录状态，不要提交
-zhihuishu_state.json
-
-# 本地配置文件，不要提交
+*.json
 .env
