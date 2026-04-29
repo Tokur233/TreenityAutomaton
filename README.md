@@ -1,24 +1,33 @@
-# Treenity
+﻿# Treenity
 
-自动刷智慧树AI课程脚本
+智慧树 AI 课程自动化辅助脚本集合。
 
 ## 项目简介
 
-这是一个基于 Playwright 的自动化脚本，用于在智慧树 AI 课程页面上自动完成“必学”资源的学习过程。脚本会尝试自动登录（如果已有登录状态存储），遍历课程目录，自动处理视频播放、弹窗提示和 PPT 阅读，帮助节省重复操作时间。
+本项目包含两个 Python 自动化脚本：
+
+- `auto_course.py`：自动完成智慧树 AI 课程中“必学资源”的刷课流程。
+- `auto_exam.py`：自动答题与答案抓取辅助脚本，可在考试页面中尝试智能作答并保存题库。
+
+脚本基于 Playwright 执行浏览器自动化，支持自动加载登录状态、处理视频播放、应对防挂机弹窗、快速跳转课程资源等功能。
 
 > 仅供学习与研究使用，请遵守智慧树平台的使用规则和服务条款。
 
 ## 目录结构
 
-- `main.py`：脚本主程序
-- `requirements.txt`：Python 依赖列表
-- `zhihuishu_state.json`：保存登录状态的 Playwright 存储文件（本地生成，已加入 .gitignore）
-- `.env.example`：环境变量配置示例文件
+- `auto_course.py`：课程自动化主程序。
+- `auto_exam.py`：考试答题与答案抓取脚本。
+- `requirements.txt`：Python 依赖列表。
+- `answers_db.json`：自动答题脚本的本地题库缓存（本地生成）。
+- `zhihuishu_state.json`：Playwright 登录状态储存文件（本地生成）。
+- `.env`：环境变量配置文件（需要自行配置相应URL）。
+- `.gitignore`：忽略本地 JSON 文件与 `.env`。
 
 ## 依赖
 
 - Python 3.8+
 - `playwright>=1.40.0`
+- `python-dotenv`
 
 ## 安装步骤
 
@@ -26,7 +35,7 @@
 2. 进入项目目录：
 
 ```bash
-cd \Path\To\Treenity
+cd D:\Files\Projects\Treenity
 ```
 
 3. 安装依赖：
@@ -35,68 +44,71 @@ cd \Path\To\Treenity
 pip install -r requirements.txt
 ```
 
-4. 安装 Playwright 浏览器引擎，并下载chromium：
+4. 安装 Playwright 浏览器引擎：
 
 ```bash
 python -m playwright install
-playwright install chromium
 ```
+
+## 配置环境
+
+在项目根目录创建一个 `.env` 文件，示例内容：
+
+```bash
+TARGET_COURSE_URL=https://ai-smart-course-student-pro.zhihuishu.com/knowledgeStudy/...
+```
+
+如果未设置 `.env`，脚本会尝试读取系统环境变量 `TARGET_COURSE_URL`。
 
 ## 使用方法
 
-### 配置目标课程
-
-在项目根目录创建一个 `.env` 文件，内容示例：
-
-```bash
-TARGET_COURSE_URL=https://ai-smart-course-student-pro.zhihuishu.com/learnPage/...
-```
-
-也可以直接复制 `.env.example` 并填写真实链接。
-
-### 第一次运行
+### 刷课脚本：`auto_course.py`
 
 1. 运行脚本：
 
 ```bash
-python main.py
+python auto_course.py
 ```
 
-2. 脚本会打开浏览器并跳转到智慧树首页。
-3. 在浏览器中完成扫码或密码登录。
-4. 登录并进入课程学习页面（左侧目录、右侧内容均可见）后，回到终端并按 `Enter`。
-5. 登录状态会保存到 `zhihuishu_state.json`，下次运行即可直接免密启动。
+2. 如果首次运行，脚本会打开浏览器并跳转至智慧树首页。
+3. 在浏览器中完成扫码或密码登录，并手动进入课程学习页面。
+4. 返回终端后按 `Enter` 继续。
+5. 登录状态将保存到 `zhihuishu_state.json`，日后运行可免密启动。
 
-### 后续运行
+### 答题脚本：`auto_exam.py`
 
-再次运行脚本后，如果 `zhihuishu_state.json` 存在且有效，脚本会自动加载登录状态并直接进入目标课程页面。
+1. 运行脚本：
+
+```bash
+python auto_exam.py
+```
+
+2. 脚本会尝试识别考试页面，自动作答并在解析页提取答案保存到 `answers_db.json`。
+3. `answers_db.json` 会作为本地题库用于后续自动答题。
 
 ## 脚本行为说明
 
-脚本会：
+`auto_course.py` 会：
 
-- 读取并使用本地登录状态文件 `zhihuishu_state.json`
-- 自动跳转到由 `.env` 中 `TARGET_COURSE_URL` 指定的课程页面
-- 扫描左侧目录中的“知识模块”“知识单元”“章节”
-- 对标记为“必学”的章节进行处理
-- 自动播放可见视频并监控播放状态
-- 处理“长时间未操作”/答题弹窗等常见防挂机提示
-- ~~对 PPT 内容模拟翻页或滚动浏览~~ （刷进度不需要翻页）
+- 自动加载本地登录状态 `zhihuishu_state.json`
+- 访问 `.env` 中配置的 `TARGET_COURSE_URL`
+- 检测课程资源布局并按“必学”资源逐项处理
+- 自动播放视频并监测播放结束状态
+- 应对“长时间未操作”防挂机弹窗与视频内弹题
+- 对 PPT/PDF 类资料进行简化处理，等待系统记录进度
+
+`auto_exam.py` 会：
+
+- 从 `answers_db.json` 加载本地题库
+- 在考试页面中尝试匹配题目并填充答案
+- 未命中题库时盲答以继续流程
+- 在解析页提取正确答案并更新题库
 
 ## 注意事项
 
-- 目标课程 URL 由项目根目录的 `.env` 文件中的 `TARGET_COURSE_URL` 指定，例如：
-
-```bash
-TARGET_COURSE_URL=https://ai-smart-course-student-pro.zhihuishu.com/learnPage/...
-```
-
-如果未设置 `.env`，脚本仍会回退检查系统环境变量 `TARGET_COURSE_URL`。
-
-如果本地使用登录状态，`zhihuishu_state.json` 会被 `.gitignore` 忽略，不会提交到仓库。
-
-- 若登录状态过期，请删除 `zhihuishu_state.json` 并重新运行脚本完成登录。
-- 脚本仅用于自动化辅助测试，实际使用时请谨慎，避免违反平台规则。
+- `.gitignore` 已忽略所有 `.json` 文件和 `.env`，本地登录状态与题库不会提交到仓库。
+- 如果登录状态过期，请删除 `zhihuishu_state.json` 并重新运行 `auto_course.py` 进行登录。
+- 请谨慎使用自动化脚本，避免违反平台规则或服务条款。
 
 ## 免责声明
 
