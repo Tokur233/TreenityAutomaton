@@ -101,12 +101,36 @@ def handle_exam_loop(page):
                                 has_answered = True
                         elif options.count() > 0:
                             for j in range(options.count()):
-                                opt_text = clean_text(options.nth(j).inner_text())
+                                opt = options.nth(j)
+
+                                # ==========================================
+                                # 【核心修复 1】：绕过选项字母，直捣黄龙提取真实文本
+                                # ==========================================
+                                content_locs = opt.locator(
+                                    ".preStyle, .inner-box, .stem"
+                                )
+                                if content_locs.count() > 0:
+                                    opt_text = clean_text(
+                                        content_locs.first.inner_text()
+                                    )
+                                else:
+                                    opt_text = clean_text(opt.inner_text())
+
                                 for ct in correct_texts:
-                                    if ct in opt_text or opt_text in ct:
+                                    # 严格全等于 或 极高相似度兜底
+                                    if (
+                                        ct == opt_text
+                                        or difflib.SequenceMatcher(
+                                            None, ct, opt_text
+                                        ).ratio()
+                                        > 0.95
+                                    ):
                                         has_answered = True
-                                        if not is_option_selected(options.nth(j)):
-                                            options.nth(j).click(force=True)
+                                        if not is_option_selected(opt):
+                                            opt.click(force=True)
+                                            time.sleep(
+                                                0.5
+                                            )  # 防止多选题并发点击丢失状态
                                         break
 
                     if not has_answered:
@@ -142,7 +166,7 @@ def handle_exam_loop(page):
             mastery_rate = page.locator(".charts-label-rate")
             if mastery_rate.count() > 0 and "100" in mastery_rate.first.inner_text():
                 print("🏆 恭喜！当前掌握度已达 100%！")
-                break  # 满分直接退出死循环，让外层去刷新页面
+                break
             else:
                 print("👀 发现【查看作答记录与解析】按钮，点击进入解析页...")
                 page.locator('text="查看作答记录与解析"').first.click(force=True)
@@ -174,13 +198,29 @@ def handle_exam_loop(page):
                         ".el-radio__label, .el-checkbox__label, ul.radio-view li"
                     )
                     for j in range(opts.count()):
-                        opt_raw = opts.nth(j).inner_text().strip().replace("\n", "")
-                        match = re.search(r"^([A-Z])[\.、\s]*(.*)", opt_raw)
+                        opt = opts.nth(j)
+                        opt_raw = opt.inner_text().strip().replace("\n", " ")
+
+                        # 强行提取开头的第一个大写字母作为选项号
+                        match = re.search(r"^([A-Z])", opt_raw)
                         if match:
                             letter = match.group(1)
-                            text_val = clean_text(match.group(2))
+
+                            # ==========================================
+                            # 【核心修复 2】：收录答案时同样绕过字母，提取纯净文本
+                            # ==========================================
+                            content_locs = opt.locator(".preStyle, .inner-box, .stem")
+                            if content_locs.count() > 0:
+                                text_val = clean_text(content_locs.first.inner_text())
+                            else:
+                                # 极端情况的兜底清洗
+                                text_val = clean_text(
+                                    re.sub(r"^([A-Z])[\.、\s]+", "", opt_raw)
+                                )
+
                             if letter in correct_letters:
                                 correct_texts.append(text_val)
+
                     if correct_texts:
                         db[title] = correct_texts
                         added_count += 1
@@ -196,7 +236,7 @@ def handle_exam_loop(page):
                 print("🔄 点击【重新答题】发起二次冲锋...")
                 retest_btn.first.click(force=True)
             else:
-                break  # 没有重考按钮说明是特殊情况，退出让外层刷新
+                break
             time.sleep(5)
 
         # =============== 状态 D：发现二次去提升按钮 (报告页) ===============
@@ -204,7 +244,7 @@ def handle_exam_loop(page):
             mastery_rate = page.locator(".charts-label-rate")
             if mastery_rate.count() > 0 and "100" in mastery_rate.first.inner_text():
                 print("🏆 恭喜！当前掌握度已达 100%！")
-                break  # 满分直接退出，让外层刷新页面
+                break
             else:
                 print("👉 点击报告页【去提升 →】，进入考场...")
                 page.locator('.improve-btn:has-text("去提升")').first.click(force=True)
@@ -222,16 +262,45 @@ def run_exam():
         )
 
         TARGET_COURSE_URL = os.getenv("TARGET_COURSE_URL")
-        if not os.path.exists(STATE_FILE) or not TARGET_COURSE_URL:
-            print("⚠️ 环境未准备好，请检查 .env 与 Cookie 文件。")
+
+        if not TARGET_COURSE_URL:
+            print("⚠️ 请先在 .env 文件中设置 TARGET_COURSE_URL")
             return
 
-        print("🍪 注入免密登录状态...")
-        context = browser.new_context(no_viewport=True, storage_state=STATE_FILE)
-        page = context.new_page()
-        page.goto(TARGET_COURSE_URL)
-        print("⏳ 等待课程主页加载...")
-        time.sleep(6)
+        if os.path.exists(STATE_FILE):
+            print("🍪 发现本地登录记忆！免密空降中...")
+            context = browser.new_context(no_viewport=True, storage_state=STATE_FILE)
+            page = context.new_page()
+            page.goto(TARGET_COURSE_URL)
+            print("⏳ 正在等待页面加载...")
+            time.sleep(6)
+
+            if (
+                page.locator('text="登录"').count() > 0
+                and page.locator(".login-box").is_visible()
+            ):
+                print(
+                    "⚠️ 登录记忆似乎已过期，请删除 zhihuishu_state.json 后重新运行脚本。"
+                )
+                return
+            print("🎉 免密登录成功！直接开始干活！")
+        else:
+            print("⚠️ 未发现登录记忆。")
+            context = browser.new_context(no_viewport=True)
+            page = context.new_page()
+            page.goto("https://www.zhihuishu.com/")
+            print("--------------------------------------------------")
+            print(
+                "🚨 【首次运行授权】请在弹出的浏览器中手动登录，进入课程学习页面后按【Enter】键！"
+            )
+            print("--------------------------------------------------")
+            input()
+            context.storage_state(path=STATE_FILE)
+            print("💾 登录状态已永久保存！")
+
+            page.goto(TARGET_COURSE_URL)
+            print("⏳ 正在前往课程主页...")
+            time.sleep(6)
 
         try:
             page.wait_for_selector(".ant-tabs-tab", timeout=15000)
@@ -239,7 +308,6 @@ def run_exam():
             print("❌ 未加载出顶部标签页，请确认是否处于正确的课程页面。")
             return
 
-        # 第一次获取总标签数（标签数一般固定，不会随便变）
         tab_count = page.locator(".ant-tabs-tab").count()
         skip_items = set()
 
@@ -247,7 +315,6 @@ def run_exam():
             print(f"\n📂 准备扫描第 {t_idx + 1} 个标签页...")
 
             while True:
-                # 每次刷新页面或重新循环后，重新获取 Tab 信息以保证 DOM 新鲜
                 tabs = page.locator(".ant-tabs-tab")
                 if tabs.count() <= t_idx:
                     break
@@ -261,7 +328,6 @@ def run_exam():
                     break
                 content_id = tab_id_attr.split("tab-")[1]
 
-                # 点击激活该标签页
                 tab_element.click(force=True)
                 time.sleep(2)
 
@@ -325,27 +391,63 @@ def run_exam():
 
                                 handle_exam_loop(page)
 
-                                # 考完满分退出后，不再点返回，直接刷新 URL！
                                 print(
                                     f"✅ 章节 [{title}] 攻克完毕，重新加载页面重置状态..."
                                 )
-                                page.goto(TARGET_COURSE_URL)
-                                time.sleep(6)
+                                # 加入防断连重试机制
+                                for attempt in range(3):
+                                    try:
+                                        page.goto(
+                                            TARGET_COURSE_URL,
+                                            timeout=20000,
+                                            wait_until="domcontentloaded",
+                                        )
+                                        break
+                                    except Exception:
+                                        print(
+                                            f"  ⚠️ 页面加载超时/中断，正在重试 ({attempt + 1}/3)..."
+                                        )
+                                        time.sleep(3)
+                                time.sleep(5)
                             else:
                                 print("  ❓ 报告页无提升入口，加入黑名单并刷新页面...")
                                 skip_items.add(knowledge_id)
-                                page.goto(TARGET_COURSE_URL)
-                                time.sleep(6)
+                                for attempt in range(3):
+                                    try:
+                                        page.goto(
+                                            TARGET_COURSE_URL,
+                                            timeout=20000,
+                                            wait_until="domcontentloaded",
+                                        )
+                                        break
+                                    except Exception:
+                                        print(
+                                            f"  ⚠️ 页面加载超时/中断，正在重试 ({attempt + 1}/3)..."
+                                        )
+                                        time.sleep(3)
+                                time.sleep(5)
                         else:
                             print(
                                 f"  ⏭️ 此知识页无提升任务(或建设中)，加入黑名单并刷新页面..."
                             )
                             skip_items.add(knowledge_id)
-                            page.goto(TARGET_COURSE_URL)
-                            time.sleep(6)
+                            for attempt in range(3):
+                                try:
+                                    page.goto(
+                                        TARGET_COURSE_URL,
+                                        timeout=20000,
+                                        wait_until="domcontentloaded",
+                                    )
+                                    break
+                                except Exception:
+                                    print(
+                                        f"  ⚠️ 页面加载超时/中断，正在重试 ({attempt + 1}/3)..."
+                                    )
+                                    time.sleep(3)
+                            time.sleep(5)
 
                         clicked_any = True
-                        break  # 中断 for 循环，外层 while 会带着最新的 skip_items 重新激活当前的 tab
+                        break
 
                 if not clicked_any:
                     print(f"✨ 标签页 【{tab_title}】 的所有可用内容已 100% 满分！")

@@ -16,16 +16,16 @@ def run_study():
             headless=False, args=["--mute-audio", "--start-maximized"]
         )
 
-        STATE_FILE = "zhihuishu_state.json"
+        state_file = "zhihuishu_state.json"
         TARGET_COURSE_URL = os.getenv("TARGET_COURSE_URL")
 
         if not TARGET_COURSE_URL:
             print("⚠️ 请先在 .env 文件中设置 TARGET_COURSE_URL")
             return
 
-        if os.path.exists(STATE_FILE):
+        if os.path.exists(state_file):
             print("🍪 发现本地登录记忆！免密空降中...")
-            context = browser.new_context(no_viewport=True, storage_state=STATE_FILE)
+            context = browser.new_context(no_viewport=True, storage_state=state_file)
             page = context.new_page()
             page.goto(TARGET_COURSE_URL)
             print("⏳ 正在等待页面加载...")
@@ -51,8 +51,8 @@ def run_study():
             )
             print("--------------------------------------------------")
             input()
-            context.storage_state(path=STATE_FILE)
-            print(f"💾 登录状态已永久保存！")
+            context.storage_state(path=state_file)
+            print("💾 登录状态已保存！")
 
         def handle_video():
             print("  ▶ 发现视频，开始自动处理...")
@@ -316,9 +316,25 @@ def run_study():
                                 f"✅ 知识页 [{title}] 探查完毕，加入已处理名单，准备重载页面..."
                             )
                             skip_items.add(knowledge_id)
-                            # 退出内页最稳妥的方式：直接重载回主URL
-                            page.goto(TARGET_COURSE_URL)
-                            time.sleep(6)
+
+                            # ==========================================
+                            # 【核心修复】：增加重载兜底机制，化解发包冲突
+                            # ==========================================
+                            for attempt in range(3):
+                                try:
+                                    # wait_until="domcontentloaded" 表示只要核心骨架出来了就行，不傻等所有的追踪脚本
+                                    page.goto(
+                                        TARGET_COURSE_URL,
+                                        timeout=20000,
+                                        wait_until="domcontentloaded",
+                                    )
+                                    break  # 成功加载就跳出重试循环
+                                except Exception as e:
+                                    print(
+                                        f"  ⚠️ 页面重载遇到网络中断，正在进行第 {attempt + 1} 次重试..."
+                                    )
+                                    time.sleep(3)  # 喘口气再刷
+                            time.sleep(5)  # 给页面重新渲染留出时间
 
                             clicked_any = True
                             break  # 中断 for，重走 while 获取最新 DOM
