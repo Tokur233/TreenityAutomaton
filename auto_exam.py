@@ -1,353 +1,10 @@
-import os
-import re
-import json
 import time
-import difflib
 from playwright.sync_api import sync_playwright
-from dotenv import load_dotenv
-
-load_dotenv()
-
-DB_FILE = "answers_db.json"
-STATE_FILE = "zhihuishu_state.json"
-BLACKLIST_FILE = "local_blacklist.json"
-EXCEPTIONS_FILE = "exceptions.json" 
-
-
-def load_manual_blacklist():
-    """读取手动配置的黑名单"""
-    if os.path.exists(BLACKLIST_FILE):
-        try:
-            with open(BLACKLIST_FILE, "r", encoding="utf-8") as f:
-                return set(json.load(f))
-        except Exception:
-            return set()
-    return set()
-
-
-def load_exceptions():
-    """读取动态生成的例外名单"""
-    if os.path.exists(EXCEPTIONS_FILE):
-        try:
-            with open(EXCEPTIONS_FILE, "r", encoding="utf-8") as f:
-                return set(json.load(f))
-        except Exception:
-            return set()
-    return set()
-
-
-def add_to_exceptions(knowledge_id):
-    """将跳过的节点加入例外名单"""
-    ex_set = load_exceptions()
-    ex_set.add(knowledge_id)
-    with open(EXCEPTIONS_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(ex_set), f, ensure_ascii=False, indent=2)
-
-
-def load_answers():
-    if os.path.exists(DB_FILE):
-        with open(DB_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-
-def save_answers(db):
-    with open(DB_FILE, "w", encoding="utf-8") as f:
-        json.dump(db, f, ensure_ascii=False, indent=2)
-
-
-def clean_title(text):
-    """专门清洗题干：去除空格、换行以及开头的题号和题型标签"""
-    if not text:
-        return ""
-    text = text.replace("\n", "").replace(" ", "").replace("\xa0", "").strip()
-    text = re.sub(r"^【.*?】", "", text)
-    text = re.sub(r"^\d+[\.、]", "", text)
-    text = re.sub(r"^【.*?】", "", text)
-    return text
-
-
-def clean_option(text):
-    """专门清洗选项：去除空格，剥离可能附带的字母前缀"""
-    if not text:
-        return ""
-    text = text.replace("\n", "").replace(" ", "").replace("\xa0", "").strip()
-    text = re.sub(r"^[A-Z][\.、]", "", text)
-    return text
-
-
-def handle_exam_loop(page, knowledge_id):
-    """处理：答题 -> 交卷 -> 报告页 -> 抓答案 的核心死循环"""
-
-    attempt_count = 0 
-    best_score = 0 
-
-    def is_option_selected(opt_locator):
-        try:
-            cls = opt_locator.get_attribute("class") or ""
-            if "is-checked" in cls or "checked" in cls or "active" in cls:
-                return True
-            input_loc = opt_locator.locator("input")
-            if input_loc.count() > 0 and input_loc.first.is_checked():
-                return True
-        except Exception:
-            pass
-        return False
-
-    while True:
-        time.sleep(3)
-        db = load_answers()
-
-       
-       
-       
-        best_result_loc = page.locator(".best-result")
-        if best_result_loc.count() > 0 and best_result_loc.first.is_visible():
-            score_text = best_result_loc.first.inner_text()
-            match = re.search(r"(\d+)%", score_text)
-            if match:
-                best_score = int(match.group(1))
-
-       
-        if attempt_count > 10 or (attempt_count > 6 and best_score >= 90):
-            print(
-                f"🛑 触发强制跳过机制 (当前尝试次数: {attempt_count}, 最好成绩: {best_score}%)，已加入 {EXCEPTIONS_FILE}！"
-            )
-            add_to_exceptions(knowledge_id)
-            return "SKIP"
-
-       
-        if (
-            page.locator('text="提交作业"').count() > 0
-            or page.locator('text="交卷"').count() > 0
-        ):
-            print(f"✍️ 发现试卷，开始智能答题 (第 {attempt_count + 1} 次冲锋)...")
-
-            nodes = page.locator(".font-sec-style-node")
-            if nodes.count() > 0:
-                for i in range(nodes.count()):
-                    nodes.nth(i).click(force=True)
-                    time.sleep(1.5)
-
-                    title_loc = page.locator(
-                        ".centent-pre .preStyle, .option-name"
-                    ).first
-                    title = (
-                        clean_title(title_loc.inner_text())
-                        if title_loc.count() > 0
-                        else ""
-                    )
-
-                    matches = difflib.get_close_matches(
-                        title, list(db.keys()), n=1, cutoff=0.85
-                    )
-
-                    options = page.locator(".el-radio, .el-checkbox, ul.radio-view li")
-                    inputs = page.locator(
-                        '.questionContent input[type="text"], .questionContent textarea, .input-ques input'
-                    )
-
-                    has_answered = False
-
-                    if matches:
-                        correct_texts = db[matches[0]]
-                        print(f"  [命中] 第 {i + 1} 题在题库中找到答案！")
-
-                        if inputs.count() > 0:
-                            for j in range(inputs.count()):
-                                val = (
-                                    correct_texts[j]
-                                    if j < len(correct_texts)
-                                    else correct_texts[-1]
-                                )
-                                target_input = inputs.nth(j)
-
-                                target_input.click()
-                                time.sleep(0.1)
-                                target_input.press_sequentially(val, delay=100)
-                                time.sleep(0.2)
-                                target_input.evaluate(
-                                    "node => { node.dispatchEvent(new Event('input', { bubbles: true })); node.dispatchEvent(new Event('change', { bubbles: true })); }"
-                                )
-                                target_input.press("Enter")
-                                target_input.blur()
-                                time.sleep(0.4)
-
-                            has_answered = True
-
-                        elif options.count() > 0:
-                            for j in range(options.count()):
-                                opt = options.nth(j)
-                                content_locs = opt.locator(
-                                    ".preStyle, .inner-box, .stem"
-                                )
-                                if content_locs.count() > 0:
-                                    opt_text = clean_option(
-                                        content_locs.first.inner_text()
-                                    )
-                                else:
-                                    opt_text = clean_option(opt.inner_text())
-
-                                for ct in correct_texts:
-                                    if (
-                                        ct == opt_text
-                                        or difflib.SequenceMatcher(
-                                            None, ct, opt_text
-                                        ).ratio()
-                                        > 0.95
-                                    ):
-                                        has_answered = True
-                                        if not is_option_selected(opt):
-                                            opt.click(force=True)
-                                            time.sleep(0.5)
-                                        break
-
-                    if not has_answered:
-                        print(f"  [盲猜] 第 {i + 1} 题未命中或新题，盲答兜底...")
-                        if inputs.count() > 0:
-                            for j in range(inputs.count()):
-                                target_input = inputs.nth(j)
-
-                                target_input.click()
-                                time.sleep(0.1)
-                                target_input.press_sequentially("1", delay=100)
-                                time.sleep(0.2)
-                                target_input.evaluate(
-                                    "node => { node.dispatchEvent(new Event('input', { bubbles: true })); node.dispatchEvent(new Event('change', { bubbles: true })); }"
-                                )
-                                target_input.press("Enter")
-                                target_input.blur()
-                                time.sleep(0.4)
-
-                        elif options.count() > 0:
-                            if not is_option_selected(options.first):
-                                options.first.click(force=True)
-
-                print("📤 全部作答完毕，准备交卷...")
-                submit_btns = page.locator(
-                    '.reviewDone, :text("提交作业"), :text("交卷")'
-                )
-                for k in range(submit_btns.count()):
-                    if submit_btns.nth(k).is_visible():
-                        submit_btns.nth(k).click(force=True)
-                        break
-                time.sleep(1.5)
-
-                confirm_btn = page.locator(
-                    ".el-dialog__wrapper:visible span.button"
-                ).filter(has_text=re.compile(r"提交试卷|确定|交卷|提交"))
-                if confirm_btn.count() > 0:
-                    confirm_btn.first.click(force=True)
-                   
-                    attempt_count += 1
-                time.sleep(6)
-
-       
-        elif (
-            page.locator('text="查看作答记录与解析"').count() > 0
-            and page.locator('text="查看作答记录与解析"').first.is_visible()
-        ):
-            mastery_rate = page.locator(".charts-label-rate")
-            if mastery_rate.count() > 0 and "100" in mastery_rate.first.inner_text():
-                print("🏆 恭喜！当前掌握度已达 100%！")
-                break
-            else:
-                print("👀 发现【查看作答记录与解析】按钮，点击进入解析页...")
-                page.locator('text="查看作答记录与解析"').first.click(force=True)
-                time.sleep(5)
-
-       
-        elif page.locator(".answer-title").count() > 0:
-            print("📚 当前为【测试解析页】，开始疯狂提取正确答案...")
-            items = page.locator(".exam-item, .question-item")
-            added_count = 0
-
-            for i in range(items.count()):
-                item = items.nth(i)
-                title_loc = item.locator(
-                    ".quest-title .option-name, .quest-title .preStyle"
-                ).first
-                title = clean_title(title_loc.inner_text())
-
-                ans_loc = item.locator(".answer-title")
-                if ans_loc.count() == 0:
-                    continue
-
-                ans_str = (
-                    ans_loc
-                    .inner_text()
-                    .replace("\n", "")
-                    .replace(" ", "")
-                    .replace("\xa0", "")
-                    .strip()
-                )
-                ans_str = ans_str.replace("参考答案：", "")
-
-                if re.match(r"^[A-Z、,\s]+$", ans_str):
-                    correct_letters = re.findall(r"[A-Z]", ans_str)
-                    correct_texts = []
-                    opts = item.locator(
-                        ".el-radio__label, .el-checkbox__label, ul.radio-view li"
-                    )
-                    for j in range(opts.count()):
-                        opt = opts.nth(j)
-                        opt_raw = opt.inner_text().strip().replace("\n", " ")
-                        match = re.search(r"^([A-Z])", opt_raw)
-                        if match:
-                            letter = match.group(1)
-                            content_locs = opt.locator(".preStyle, .inner-box, .stem")
-                            if content_locs.count() > 0:
-                                text_val = clean_option(content_locs.first.inner_text())
-                            else:
-                                text_val = clean_option(
-                                    re.sub(r"^([A-Z])[\.、\s]+", "", opt_raw)
-                                )
-
-                            if letter in correct_letters:
-                                correct_texts.append(text_val)
-
-                    if correct_texts:
-                        db[title] = correct_texts
-                        added_count += 1
-
-                elif "(1)" in ans_str or "（1）" in ans_str:
-                    parts = re.split(r"[\(（]\d+[\)）]", ans_str)
-                    correct_texts = [p.strip() for p in parts if p.strip()]
-                    if correct_texts:
-                        db[title] = correct_texts
-                        added_count += 1
-
-                else:
-                    db[title] = [ans_str]
-                    added_count += 1
-
-            save_answers(db)
-            print(f"💾 题库已更新！录入 {added_count} 题，总库容: {len(db)} 题。")
-
-            retest_btn = page.locator('text="重新答题"')
-            if retest_btn.count() > 0 and retest_btn.first.is_visible():
-                print("🔄 点击【重新答题】发起二次冲锋...")
-                retest_btn.first.click(force=True)
-            else:
-                break
-            time.sleep(5)
-
-       
-        elif page.locator('.improve-btn:has-text("去提升")').count() > 0:
-            mastery_rate = page.locator(".charts-label-rate")
-            if mastery_rate.count() > 0 and "100" in mastery_rate.first.inner_text():
-                print("🏆 恭喜！当前掌握度已达 100%！")
-                break
-            else:
-                print("👉 点击报告页【去提升 →】，进入考场...")
-                page.locator('.improve-btn:has-text("去提升")').first.click(force=True)
-                time.sleep(4)
-
-        else:
-            print("❓ 页面状态加载中...")
-            time.sleep(3)
-
-    return "SUCCESS"
+from config import TARGET_COURSE_URL
+from core_auth import login_and_get_page, check_cookie_expired
+from core_utils import load_manual_blacklist, load_exceptions
+from actions import handle_exam_loop
+import re
 
 
 def run_exam():
@@ -355,56 +12,9 @@ def run_exam():
         browser = p.chromium.launch(
             headless=False, args=["--mute-audio", "--start-maximized"]
         )
-
-        TARGET_COURSE_URL = os.getenv("TARGET_COURSE_URL")
-
-        if not TARGET_COURSE_URL:
-            print("⚠️ 请先在 .env 文件中设置 TARGET_COURSE_URL")
+        context, page = login_and_get_page(browser)
+        if not page:
             return
-
-        def check_cookie_expired(current_page):
-            if (
-                "passport.zhihuishu.com" in current_page.url
-                or current_page.locator(".wall-warp, .login-box, #f_sign_up").count()
-                > 0
-            ):
-                print("\n⚠️ 警报：登录记忆 (Cookie) 已过期或在异地登录被踢下线！")
-                if os.path.exists(STATE_FILE):
-                    os.remove(STATE_FILE)
-                    print("🗑️ 已自动为您删除失效的 Cookie 文件。")
-                print("💡 请直接重新运行本脚本，根据弹窗重新登录即可恢复进度！")
-                return True
-            return False
-
-        if os.path.exists(STATE_FILE):
-            print("🍪 发现本地登录记忆！免密空降中...")
-            context = browser.new_context(no_viewport=True, storage_state=STATE_FILE)
-            page = context.new_page()
-            page.goto(TARGET_COURSE_URL)
-            print("⏳ 正在等待页面加载...")
-            time.sleep(6)
-
-            if check_cookie_expired(page):
-                return
-
-            print("🎉 免密登录成功！直接开始干活！")
-        else:
-            print("⚠️ 未发现登录记忆。")
-            context = browser.new_context(no_viewport=True)
-            page = context.new_page()
-            page.goto("https://www.zhihuishu.com/")
-            print("--------------------------------------------------")
-            print(
-                "🚨 【首次运行授权】请在弹出的浏览器中手动登录，进入课程学习页面后按【Enter】键！"
-            )
-            print("--------------------------------------------------")
-            input()
-            context.storage_state(path=STATE_FILE)
-            print("💾 登录状态已永久保存！")
-
-            page.goto(TARGET_COURSE_URL)
-            print("⏳ 正在前往课程主页...")
-            time.sleep(6)
 
         try:
             page.wait_for_selector(".ant-tabs-tab", timeout=15000)
@@ -423,11 +33,8 @@ def run_exam():
 
         for t_idx in range(tab_count):
             print(f"\n📂 准备扫描第 {t_idx + 1} 个标签页...")
-
             while True:
-               
                 exceptions_list = load_exceptions()
-
                 tabs = page.locator(".ant-tabs-tab")
                 if tabs.count() <= t_idx:
                     break
@@ -451,12 +58,10 @@ def run_exam():
                 content_container = page.locator(f"#{content_id}")
                 items = content_container.locator(".item-content")
                 item_count = items.count()
-
                 clicked_any = False
 
                 for i_idx in range(item_count):
                     item = content_container.locator(".item-content").nth(i_idx)
-
                     title_loc = item.locator(".item-title")
                     title = (
                         title_loc.inner_text() if title_loc.count() > 0 else "未知章节"
@@ -467,7 +72,6 @@ def run_exam():
                         print(f"  🛑 知识页 [{title}] 命中手动黑名单，直接无视...")
                         continue
 
-                   
                     if knowledge_id in skip_items or knowledge_id in exceptions_list:
                         continue
 
@@ -492,14 +96,12 @@ def run_exam():
                             .filter(has_text=re.compile(r"^去提升$"))
                             .first
                         )
-
                         if (
                             improve_btn_main.count() > 0
                             and improve_btn_main.is_visible()
                         ):
                             improve_btn_main.click(force=True)
                             time.sleep(4)
-
                             improve_btn_inner = page.locator(
                                 '.improve-btn:has-text("去提升")'
                             )
@@ -511,7 +113,6 @@ def run_exam():
                                 improve_btn_inner.click(force=True)
                                 time.sleep(4)
 
-                               
                                 loop_status = handle_exam_loop(page, knowledge_id)
 
                                 if loop_status == "SKIP":
@@ -548,7 +149,6 @@ def run_exam():
                                 )
                                 time.sleep(3)
                         time.sleep(2)
-
                         clicked_any = True
                         break
 

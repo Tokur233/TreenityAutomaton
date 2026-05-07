@@ -2,3 +2,4 @@
 .env
 local_blacklist.json
 exceptions.json
+__pycache__
