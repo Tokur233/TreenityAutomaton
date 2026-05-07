@@ -1,2 +1,4 @@
 *.json
 .env
+local_blacklist.json
+exceptions.json
